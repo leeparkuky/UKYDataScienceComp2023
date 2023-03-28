@@ -43,6 +43,8 @@ class ContextDistilBertwithData(nn.Module):
                      'attention_mask_content':attention_mask_content}
         x = self.contextDistilBert(**input_dict)
         fernandes_data = torch.cat([v.reshape(-1, 1) for k,v in kwargs.items() if 'shares' not in k], dim = -1)
+        fernandes_data = torch.cat([torch.vstack([torch.flatten(torch.kron(v, v)) for v in fernandes_data]),
+                                    fernandes_data], dim = -1)
         return torch.cat([x,fernandes_data], dim = -1)
         
         
