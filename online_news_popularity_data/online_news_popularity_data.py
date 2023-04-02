@@ -1,12 +1,12 @@
 import datasets
 import csv
 from glob import glob
-from tempfile import NamedTemporaryFile
 import pandas as pd
 from tqdm import tqdm
 import pyarrow as pa
 import os
-
+import csv
+from csv import DictReader
 
 _DESCRIPTION = """\
 This data is used for the data science competition at University of Kentucky in 2023
@@ -34,7 +34,12 @@ isbn="978-3-319-23485-4"
 
 _FILEPATH = os.path.join(os.getcwd(),'online_news_popularity_data', 'online_news_popularity_data.csv')
     
+with open(_FILEPATH, 'r') as f:
+    reader = DictReader(f)
+    float_variables = [x for x in reader.fieldnames if x not in ['title','content','shares','shares_class']]
     
+# _FILEPATH = os.path.join(os.getcwd(), 'online_news_popularity_data.csv')
+
     
     
     
@@ -53,8 +58,6 @@ class online_news_popularity_Config(datasets.BuilderConfig):
         
 
 
-float_variables = 'n_tokens_title,n_tokens_content,n_unique_tokens,n_non_stop_unique_tokens,num_hrefs,num_self_hrefs,num_imgs,num_videos,average_token_length,num_keywords,data_channel_is_lifestyle,data_channel_is_entertainment,data_channel_is_bus,data_channel_is_socmed,data_channel_is_tech,data_channel_is_world,kw_min_min,kw_max_min,kw_avg_min,kw_min_max,kw_max_max,kw_avg_max,kw_min_avg,kw_max_avg,kw_avg_avg,self_reference_min_shares,self_reference_max_shares,self_reference_avg_sharess,weekday_is_monday,weekday_is_tuesday,weekday_is_wednesday,weekday_is_thursday,weekday_is_friday,weekday_is_saturday,weekday_is_sunday,LDA_00,LDA_01,LDA_02,LDA_03,LDA_04,global_subjectivity,global_sentiment_polarity,global_rate_positive_words,global_rate_negative_words,rate_positive_words,rate_negative_words,avg_positive_polarity,min_positive_polarity,max_positive_polarity,avg_negative_polarity,min_negative_polarity,max_negative_polarity,title_subjectivity,title_sentiment_polarity,abs_title_subjectivity,abs_title_sentiment_polarity'.split(',')
-        
         
 class online_news_popularity(datasets.GeneratorBasedBuilder):
     
@@ -69,7 +72,7 @@ class online_news_popularity(datasets.GeneratorBasedBuilder):
         main_features = {
                 "title": datasets.Value("string"),
                 "content": datasets.Value("string"),
-                "shares" : datasets.Value("int32"),
+                "shares" : datasets.Value("float"),
                 }
         main_features.update({var: datasets.Value("float") for var in float_variables})
         main_features.update({'shares_class': datasets.features.ClassLabel(num_classes=2, names=["neg", "pos"])})
@@ -88,39 +91,18 @@ class online_news_popularity(datasets.GeneratorBasedBuilder):
     
           
     def _split_generators(self, dl_manager):
-        downloaded_files = dl_manager.download({'train_path':_FILEPATH, 
-                                                'valid_path':_FILEPATH})
-
+        downloaded_files = dl_manager.download(_FILEPATH)
         return [
             datasets.SplitGenerator(
                 name=datasets.Split.TRAIN,
-                gen_kwargs={"split_key": "train", 'filepath':downloaded_files['train_path']},
-            ),
-            datasets.SplitGenerator(
-                name=datasets.Split.VALIDATION,
-                gen_kwargs={"split_key": "validate", 'filepath':downloaded_files['valid_path']},
+                gen_kwargs={'filepath':downloaded_files},  #downloaded_files['train_path']
             ),
         ]            
             
             
-    def _get_examples_from_split(self, split_key, filepath):
-        from sklearn.model_selection import train_test_split
-        df = pd.read_csv(filepath)
-        df = df.loc[df.notnull().prod(axis = 1).astype(bool),:].reset_index(drop = True)
-        df_train, df_test = train_test_split(df, test_size = .2, random_state = 2023)
-        
-        if split_key.lower() == "train":
-            return df_train
-        elif split_key.lower() == "validate":
-            return df_test
-        else:
-            raise ValueError(f"Invalid split key {split_key}") 
-            
-    def _generate_examples(self, split_key, filepath):
-        df = self._get_examples_from_split(split_key, filepath) #, file_path)
-        for i, row in df.iterrows():
-            yield i, row.to_dict()
-        
-#         for i, t, c, s in zip(range(len(title)), title, content, shares):
-#             yield i, {'title':t, 'content':c, 'shares':s}
-                
+
+    def _generate_examples(self, filepath):
+        with open(filepath, 'r') as f:
+            reader = DictReader(f)
+            for i, row in enumerate(reader):
+                yield i, row

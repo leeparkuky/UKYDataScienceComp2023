@@ -139,7 +139,10 @@ if __name__ == '__main__':
     print('start process')
     res = Parallel(n_jobs = -1)(delayed(save_text_csv)(urls[i*batch_size:(i+1)*batch_size], shares[i*batch_size:(i+1)*batch_size], f"dataset_{i}.csv", summary_df.loc[i*batch_size:(i+1)*batch_size,:]) for i in tqdm(range(N//batch_size+1)))
     
-    gen_temp_file()
+    path = gen_temp_file()
+    df = pd.read_csv(path)
+    df = df.loc[df.notnull().prod(axis = 1).astype(bool),:].reset_index(drop = True)
+    df.to_csv(path, index = False)
 
 #     text_df = get_texts(urls[:1000], shares[:1000])
 #     save_text_csv(urls[:100], shares[:100], 'text_data.csv')
