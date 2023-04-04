@@ -3,8 +3,7 @@ import torch.nn as nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 
-from transformers import BertModel, BertConfig
-from transformers import BertForMaskedLM
+from transformers import BertModel, BertConfig, BertPreTrainedModel, BertForMaskedLM
 
 from typing import Optional, List, Union, Tuple
 
@@ -57,6 +56,33 @@ class MashableEmbeddings(nn.Module):
         self.register_buffer(
             "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
         )
+        
+    def load_bert_state_dict(self, state_dict):
+        from collections import defaultdict
+        word_embedding_weight = defaultdict(torch.Tensor)
+        position_embedding_weight = defaultdict(torch.Tensor)
+        token_type_embeddings_weight = defaultdict(torch.Tensor)
+        LayerNorm_weight = defaultdict(torch.Tensor)
+        
+        for key, val in state_dict.items():
+            if 'word_embeddings' in key:
+                key = key.split('.')[-1]
+                word_embedding_weight[key] = val
+            elif 'position_embeddings' in key:
+                key = key.split('.')[-1]
+                position_embedding_weight[key] = val
+            elif 'token_type_embeddings' in key:
+                key = key.split('.')[-1]
+                token_type_embeddings_weight[key] = val
+            elif 'LayerNorm' in key:
+                key = key.split('.')[-1]
+                LayerNorm_weight[key] = val
+        
+        self.word_embeddings.load_state_dict( word_embedding_weight )
+        self.position_embeddings.load_state_dict( position_embedding_weight )
+        self.token_type_embeddings.load_state_dict( token_type_embeddings_weight )
+        self.LayerNorm.load_state_dict( LayerNorm_weight )
+        
 
     def forward(
         self,
@@ -104,10 +130,40 @@ class MashableEmbeddings(nn.Module):
     
 class MashableBertModel(BertModel):
     def __init__(self, model_ckpt):
+        self.model_ckpt = model_ckpt
         config = BertConfig.from_pretrained(model_ckpt)
         super().__init__(config)
-        self.embeddings = MashableEmbeddings(config)    
+        embedding_state = self.embeddings.state_dict()        
+        self.embeddings = MashableEmbeddings(config)
+        self.embeddings.load_bert_state_dict(embedding_state)
+
         
+    def load_bert_state_dict(self):
+        pretrained_model = BertModel.from_pretrained(self.model_ckpt)
+        
+        embedding_state = pretrained_model.embeddings.state_dict()
+        self.embeddings.load_bert_state_dict(embedding_state)
+        
+        encoder_state = {}; pooler_state = {}
+        
+        for key, val in pretrained_model.state_dict().items():
+            if 'embeddings' in key:
+                pass
+            elif 'encoder' in key:
+                encoder_state[key[8:]] = val
+            elif 'pooler' in key:
+                pooler_state[key[7:]] = val
+            else:
+                pass
+            
+        self.encoder.load_state_dict( encoder_state )
+        self.pooler.load_state_dict( pooler_state )
+        
+        del pretrained_model
+        del embedding_state
+        del encoder_state
+        del pooler_state
+                
         
     def forward(
         self,
@@ -245,6 +301,7 @@ class MashableBertForMaskedLM(BertForMaskedLM):
         config = BertConfig.from_pretrained(model_ckpt)
         super().__init__(config)
         self.bert = MashableBertModel(model_ckpt)
+        self.bert.load_bert_state_dict()
         
     def forward(
         self,
@@ -301,6 +358,100 @@ class MashableBertForMaskedLM(BertForMaskedLM):
         return MaskedLMOutput(
             loss=masked_lm_loss,
             logits=prediction_scores,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+    
+    
+    
+class MashableBertForClassification(BertPreTrainedModel):
+    def __init__(self, model_ckpt, num_labels):
+        self.config = BertConfig.from_pretrained(model_ckpt)
+        super().__init__(self.config)
+        
+        self.num_labels = num_labels
+        self.bert = MashableBertModel(model_ckpt)
+        classifier_dropout = (
+            self.config.classifier_dropout if self.config.classifier_dropout is not None else self.config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(classifier_dropout)
+        self.cls        = nn.Linear(self.config.hidden_size, num_labels)
+        
+    def base_model_load_weight(self, weight_file_path, return_weight = False):
+        weight = torch.load(weight_file_path)
+        model_weight = self.bert.state_dict()
+        
+        new_weight = {}
+        for key in weight.keys():
+            long_key = [base_model_key for base_model_key in model_weight.keys() if key in base_model_key][0]
+            new_weight[long_key] = weight[key]
+        for key in model_weight.keys():
+            if key not in new_weight.keys():
+                new_weight[key] = model_weight[key]
+        
+        self.bert.load_state_dict(new_weight)
+        
+#         del weight
+#         del new_weight
+#         del model_weight
+
+        if return_weight:
+            return self.base_model.state_dict()
+        
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        shares_class: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        fernandes: Optional[torch.Tensor] = None,
+        **kwargs
+    ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
+        
+        
+#         fernandes = kwargs['fernandes']
+        labels = shares_class
+        
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            fernandes = fernandes
+        )
+
+        pooled_output = outputs[1]
+
+        pooled_output = self.dropout(pooled_output)
+        logits = self.cls(pooled_output)
+
+        loss = None
+        
+        loss_fct = CrossEntropyLoss()
+        loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        
+        
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
