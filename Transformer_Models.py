@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
+from torch import Tensor
 
 from transformers import BertModel, BertConfig, BertPreTrainedModel, BertForMaskedLM
 
@@ -28,6 +28,9 @@ from transformers.utils import  (
     logging,
     replace_return_docstrings,
 )
+
+
+
 
 
 
@@ -136,7 +139,19 @@ class MashableBertModel(BertModel):
         embedding_state = self.embeddings.state_dict()        
         self.embeddings = MashableEmbeddings(config)
         self.embeddings.load_bert_state_dict(embedding_state)
-
+        
+        
+    def load_pretrained_model(self, pretrained_state_dict):
+        state_dict = {}
+        state_dict_keys = ['.'.join(x.split('.')[1:]) for x in pretrained_state_dict.keys()]
+        state_dict_keys_maps = {'.'.join(x.split('.')[1:]):x for x in pretrained_state_dict.keys()}
+        for key, val in self.state_dict().items():
+            if key in state_dict_keys:
+                state_dict[key] = pretrained_state_dict[state_dict_keys_maps[key]]
+            elif key in pretrained_state_dict.keys():
+                state_dict[key] = pretraeind_state_dict[key]
+        self.load_state_dict(state_dict)
+        
         
     def load_bert_state_dict(self):
         pretrained_model = BertModel.from_pretrained(self.model_ckpt)
@@ -366,7 +381,7 @@ class MashableBertForMaskedLM(BertForMaskedLM):
     
     
 class MashableBertForClassification(BertPreTrainedModel):
-    def __init__(self, model_ckpt, num_labels):
+    def __init__(self, model_ckpt, num_labels, custom_loss = None):
         self.config = BertConfig.from_pretrained(model_ckpt)
         super().__init__(self.config)
         
@@ -377,6 +392,8 @@ class MashableBertForClassification(BertPreTrainedModel):
         )
         self.dropout = nn.Dropout(classifier_dropout)
         self.cls        = nn.Linear(self.config.hidden_size, num_labels)
+        
+        self.custom_loss = custom_loss
         
     def base_model_load_weight(self, weight_file_path, return_weight = False):
         weight = torch.load(weight_file_path)
@@ -412,9 +429,11 @@ class MashableBertForClassification(BertPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         fernandes: Optional[torch.Tensor] = None,
+        custom_loss = None,
         **kwargs
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         
+        custom_loss = self.custom_loss
         
 #         fernandes = kwargs['fernandes']
         labels = shares_class
@@ -441,7 +460,10 @@ class MashableBertForClassification(BertPreTrainedModel):
 
         loss = None
         
-        loss_fct = CrossEntropyLoss()
+        if custom_loss:
+            loss_fct = custom_loss
+        else:
+            loss_fct = CrossEntropyLoss()
         loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
         
         

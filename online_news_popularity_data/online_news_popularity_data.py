@@ -75,7 +75,7 @@ class online_news_popularity(datasets.GeneratorBasedBuilder):
                 "shares" : datasets.Value("float"),
                 }
         main_features.update({var: datasets.Value("float") for var in float_variables})
-        main_features.update({'shares_class': datasets.features.ClassLabel(num_classes=2, names=["neg", "pos"])})
+        main_features.update({'shares_class': datasets.features.ClassLabel(num_classes=20, names=list(range(20)))})
         
         return datasets.DatasetInfo(
             description="UKY Data Science Competition 2023 Raw Data",
